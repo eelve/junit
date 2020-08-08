@@ -4,9 +4,12 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.util.List;
 
+import org.junit.internal.runners.statements.RunAfters;
+import org.junit.internal.runners.statements.RunBefores;
 import org.junit.runner.RunWith;
 import org.junit.runner.notification.RunNotifier;
 import org.junit.runners.BlockJUnit4ClassRunner;
+import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.model.FrameworkField;
 import org.junit.runners.model.FrameworkMethod;
@@ -29,7 +32,7 @@ public class BlockJUnit4ClassRunnerWithParameters extends
 
     public BlockJUnit4ClassRunnerWithParameters(TestWithParameters test)
             throws InitializationError {
-        super(test.getTestClass().getJavaClass());
+        super(test.getTestClass());
         parameters = test.getParameters().toArray(
                 new Object[test.getParameters().size()]);
         name = test.getName();
@@ -70,6 +73,13 @@ public class BlockJUnit4ClassRunnerWithParameters extends
             int index = annotation.value();
             try {
                 field.set(testClassInstance, parameters[index]);
+            } catch (IllegalAccessException e) {
+                IllegalAccessException wrappedException = new IllegalAccessException(
+                        "Cannot set parameter '" + field.getName()
+                                + "'. Ensure that the field '" + field.getName()
+                                + "' is public.");
+                wrappedException.initCause(e);
+                throw wrappedException;
             } catch (IllegalArgumentException iare) {
                 throw new Exception(getTestClass().getName()
                         + ": Trying to set " + field.getName()
@@ -135,7 +145,46 @@ public class BlockJUnit4ClassRunnerWithParameters extends
 
     @Override
     protected Statement classBlock(RunNotifier notifier) {
-        return childrenInvoker(notifier);
+        Statement statement = childrenInvoker(notifier);
+        statement = withBeforeParams(statement);
+        statement = withAfterParams(statement);
+        return statement;
+    }
+
+    private Statement withBeforeParams(Statement statement) {
+        List<FrameworkMethod> befores = getTestClass()
+                .getAnnotatedMethods(Parameterized.BeforeParam.class);
+        return befores.isEmpty() ? statement : new RunBeforeParams(statement, befores);
+    }
+
+    private class RunBeforeParams extends RunBefores {
+        RunBeforeParams(Statement next, List<FrameworkMethod> befores) {
+            super(next, befores, null);
+        }
+
+        @Override
+        protected void invokeMethod(FrameworkMethod method) throws Throwable {
+            int paramCount = method.getMethod().getParameterTypes().length;
+            method.invokeExplosively(null, paramCount == 0 ? (Object[]) null : parameters);
+        }
+    }
+
+    private Statement withAfterParams(Statement statement) {
+        List<FrameworkMethod> afters = getTestClass()
+                .getAnnotatedMethods(Parameterized.AfterParam.class);
+        return afters.isEmpty() ? statement : new RunAfterParams(statement, afters);
+    }
+
+    private class RunAfterParams extends RunAfters {
+        RunAfterParams(Statement next, List<FrameworkMethod> afters) {
+            super(next, afters, null);
+        }
+
+        @Override
+        protected void invokeMethod(FrameworkMethod method) throws Throwable {
+            int paramCount = method.getMethod().getParameterTypes().length;
+            method.invokeExplosively(null, paramCount == 0 ? (Object[]) null : parameters);
+        }
     }
 
     @Override

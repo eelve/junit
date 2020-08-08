@@ -1,7 +1,5 @@
 package org.junit.internal.runners.statements;
 
-import java.lang.management.ManagementFactory;
-import java.lang.management.ThreadMXBean;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -12,6 +10,8 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.junit.internal.management.ManagementFactory;
+import org.junit.internal.management.ThreadMXBean;
 import org.junit.runners.model.MultipleFailureException;
 import org.junit.runners.model.Statement;
 import org.junit.runners.model.TestTimedOutException;
@@ -122,12 +122,26 @@ public class FailOnTimeout extends Statement {
         FutureTask<Throwable> task = new FutureTask<Throwable>(callable);
         ThreadGroup threadGroup = new ThreadGroup("FailOnTimeoutGroup");
         Thread thread = new Thread(threadGroup, task, "Time-limited test");
-        thread.setDaemon(true);
-        thread.start();
-        callable.awaitStarted();
-        Throwable throwable = getResult(task, thread);
-        if (throwable != null) {
-            throw throwable;
+        try {
+            thread.setDaemon(true);
+            thread.start();
+            callable.awaitStarted();
+            Throwable throwable = getResult(task, thread);
+            if (throwable != null) {
+                throw throwable;
+            }
+        } finally {
+            try {
+                thread.join(1);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            try {
+                threadGroup.destroy();
+            } catch (IllegalThreadStateException e) {
+                // If a thread from the group is still alive, the ThreadGroup cannot be destroyed.
+                // Swallow the exception to keep the same behavior prior to this change.
+            }
         }
     }
 

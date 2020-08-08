@@ -3,6 +3,7 @@ package org.junit.runners;
 import static org.junit.internal.runners.rules.RuleMemberValidator.RULE_METHOD_VALIDATOR;
 import static org.junit.internal.runners.rules.RuleMemberValidator.RULE_VALIDATOR;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -22,14 +23,18 @@ import org.junit.internal.runners.statements.InvokeMethod;
 import org.junit.internal.runners.statements.RunAfters;
 import org.junit.internal.runners.statements.RunBefores;
 import org.junit.rules.MethodRule;
-import org.junit.rules.RunRules;
 import org.junit.rules.TestRule;
 import org.junit.runner.Description;
 import org.junit.runner.notification.RunNotifier;
+import org.junit.runners.model.FrameworkMember;
 import org.junit.runners.model.FrameworkMethod;
 import org.junit.runners.model.InitializationError;
+import org.junit.runners.model.MemberValueConsumer;
 import org.junit.runners.model.MultipleFailureException;
 import org.junit.runners.model.Statement;
+import org.junit.runners.model.TestClass;
+import org.junit.validator.PublicClassValidator;
+import org.junit.validator.TestClassValidator;
 
 /**
  * Implements the JUnit 4 standard test case class model, as defined by the
@@ -56,6 +61,7 @@ import org.junit.runners.model.Statement;
  * @since 4.5
  */
 public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
+    private static TestClassValidator PUBLIC_CLASS_VALIDATOR = new PublicClassValidator();
 
     private final ConcurrentMap<FrameworkMethod, Description> methodDescriptions = new ConcurrentHashMap<FrameworkMethod, Description>();
 
@@ -65,6 +71,16 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
      * @throws InitializationError if the test class is malformed.
      */
     public BlockJUnit4ClassRunner(Class<?> testClass) throws InitializationError {
+        super(testClass);
+    }
+
+    /**
+     * Creates a BlockJUnit4ClassRunner to run {@code testClass}.
+     *
+     * @throws InitializationError if the test class is malformed.
+     * @since 4.13
+     */
+    protected BlockJUnit4ClassRunner(TestClass testClass) throws InitializationError {
         super(testClass);
     }
 
@@ -78,13 +94,12 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
         if (isIgnored(method)) {
             notifier.fireTestIgnored(description);
         } else {
-            Statement statement;
-            try {
-                statement = methodBlock(method);
-            }
-            catch (Throwable ex) {
-                statement = new Fail(ex);
-            }
+            Statement statement = new Statement() {
+                @Override
+                public void evaluate() throws Throwable {
+                    methodBlock(method).evaluate();
+                }
+            };
             runLeaf(statement, description, notifier);
         }
     }
@@ -133,11 +148,18 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
     protected void collectInitializationErrors(List<Throwable> errors) {
         super.collectInitializationErrors(errors);
 
+        validatePublicConstructor(errors);
         validateNoNonStaticInnerClass(errors);
         validateConstructor(errors);
         validateInstanceMethods(errors);
         validateFields(errors);
         validateMethods(errors);
+    }
+
+    private void validatePublicConstructor(List<Throwable> errors) {
+        if (getTestClass().getJavaClass() != null) {
+            errors.addAll(PUBLIC_CLASS_VALIDATOR.validateTestClass(getTestClass()));
+        }
     }
 
     protected void validateNoNonStaticInnerClass(List<Throwable> errors) {
@@ -255,8 +277,8 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
      * <ul>
      * <li>Invoke {@code method} on the result of {@link #createTest(org.junit.runners.model.FrameworkMethod)}, and
      * throw any exceptions thrown by either operation.
-     * <li>HOWEVER, if {@code method}'s {@code @Test} annotation has the {@code
-     * expecting} attribute, return normally only if the previous step threw an
+     * <li>HOWEVER, if {@code method}'s {@code @Test} annotation has the {@link Test#expected()}
+     * attribute, return normally only if the previous step threw an
      * exception of the correct type, and throw an exception otherwise.
      * <li>HOWEVER, if {@code method}'s {@code @Test} annotation has the {@code
      * timeout} attribute, throw an exception if the previous step takes more
@@ -297,6 +319,7 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
         statement = withBefores(method, test, statement);
         statement = withAfters(method, test, statement);
         statement = withRules(method, test, statement);
+        statement = withInterruptIsolation(statement);
         return statement;
     }
 
@@ -313,15 +336,15 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
 
     /**
      * Returns a {@link Statement}: if {@code method}'s {@code @Test} annotation
-     * has the {@code expecting} attribute, return normally only if {@code next}
+     * has the {@link Test#expected()} attribute, return normally only if {@code next}
      * throws an exception of the correct type, and throw an exception
      * otherwise.
      */
     protected Statement possiblyExpectingExceptions(FrameworkMethod method,
             Object test, Statement next) {
         Test annotation = method.getAnnotation(Test.class);
-        return expectsException(annotation) ? new ExpectException(next,
-                getExpectedException(annotation)) : next;
+        Class<? extends Throwable> expectedExceptionClass = getExpectedException(annotation);
+        return expectedExceptionClass != null ? new ExpectException(next, expectedExceptionClass) : next;
     }
 
     /**
@@ -370,29 +393,23 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
                 target);
     }
 
-    private Statement withRules(FrameworkMethod method, Object target,
-            Statement statement) {
-        List<TestRule> testRules = getTestRules(target);
-        Statement result = statement;
-        result = withMethodRules(method, testRules, target, result);
-        result = withTestRules(method, testRules, result);
-
-        return result;
-    }
-
-    private Statement withMethodRules(FrameworkMethod method, List<TestRule> testRules,
-            Object target, Statement result) {
-        Statement withMethodRules = result;
-        for (org.junit.rules.MethodRule each : getMethodRules(target)) {
-            if (!(each instanceof TestRule && testRules.contains(each))) {
-                withMethodRules = each.apply(withMethodRules, method, target);
+    private Statement withRules(FrameworkMethod method, Object target, Statement statement) {
+        RuleContainer ruleContainer = new RuleContainer();
+        CURRENT_RULE_CONTAINER.set(ruleContainer);
+        try {
+            List<TestRule> testRules = getTestRules(target);
+            for (MethodRule each : rules(target)) {
+                if (!(each instanceof TestRule && testRules.contains(each))) {
+                    ruleContainer.add(each);
+                }
             }
+            for (TestRule rule : testRules) {
+                ruleContainer.add(rule);
+            }
+        } finally {
+            CURRENT_RULE_CONTAINER.remove();
         }
-        return withMethodRules;
-    }
-
-    private List<org.junit.rules.MethodRule> getMethodRules(Object target) {
-        return rules(target);
+        return ruleContainer.apply(method, describeChild(method), target, statement);
     }
 
     /**
@@ -401,27 +418,12 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
      *         test
      */
     protected List<MethodRule> rules(Object target) {
-        List<MethodRule> rules = getTestClass().getAnnotatedMethodValues(target, 
-                Rule.class, MethodRule.class);
-
-        rules.addAll(getTestClass().getAnnotatedFieldValues(target,
-                Rule.class, MethodRule.class));
-
-        return rules;
-    }
-
-    /**
-     * Returns a {@link Statement}: apply all non-static fields
-     * annotated with {@link Rule}.
-     *
-     * @param statement The base statement
-     * @return a RunRules statement if any class-level {@link Rule}s are
-     *         found, or the base statement
-     */
-    private Statement withTestRules(FrameworkMethod method, List<TestRule> testRules,
-            Statement statement) {
-        return testRules.isEmpty() ? statement :
-                new RunRules(statement, testRules, describeChild(method));
+        RuleCollector<MethodRule> collector = new RuleCollector<MethodRule>();
+        getTestClass().collectAnnotatedMethodValues(target, Rule.class, MethodRule.class,
+                collector);
+        getTestClass().collectAnnotatedFieldValues(target, Rule.class, MethodRule.class,
+                collector);
+        return collector.result;
     }
 
     /**
@@ -430,13 +432,10 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
      *         test
      */
     protected List<TestRule> getTestRules(Object target) {
-        List<TestRule> result = getTestClass().getAnnotatedMethodValues(target,
-                Rule.class, TestRule.class);
-
-        result.addAll(getTestClass().getAnnotatedFieldValues(target,
-                Rule.class, TestRule.class));
-
-        return result;
+        RuleCollector<TestRule> collector = new RuleCollector<TestRule>();
+        getTestClass().collectAnnotatedMethodValues(target, Rule.class, TestRule.class, collector);
+        getTestClass().collectAnnotatedFieldValues(target, Rule.class, TestRule.class, collector);
+        return collector.result;
     }
 
     private Class<? extends Throwable> getExpectedException(Test annotation) {
@@ -447,14 +446,28 @@ public class BlockJUnit4ClassRunner extends ParentRunner<FrameworkMethod> {
         }
     }
 
-    private boolean expectsException(Test annotation) {
-        return getExpectedException(annotation) != null;
-    }
-
     private long getTimeout(Test annotation) {
         if (annotation == null) {
             return 0;
         }
         return annotation.timeout();
+    }
+
+    private static final ThreadLocal<RuleContainer> CURRENT_RULE_CONTAINER =
+            new ThreadLocal<RuleContainer>();
+
+    private static class RuleCollector<T> implements MemberValueConsumer<T> {
+        final List<T> result = new ArrayList<T>();
+
+        public void accept(FrameworkMember<?> member, T value) {
+            Rule rule = member.getAnnotation(Rule.class);
+            if (rule != null) {
+                RuleContainer container = CURRENT_RULE_CONTAINER.get();
+                if (container != null) {
+                    container.setOrder(value, rule.order());
+                }
+            }
+            result.add(value);
+        }
     }
 }

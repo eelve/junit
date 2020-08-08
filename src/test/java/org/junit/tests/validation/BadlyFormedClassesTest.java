@@ -1,5 +1,7 @@
 package org.junit.tests.validation;
 
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 
 import org.junit.Before;
@@ -26,8 +28,6 @@ public class BadlyFormedClassesTest {
         }
     }
 
-    ;
-
     @RunWith(JUnit4ClassRunner.class)
     public static class BadBeforeMethodWithLegacyRunner {
         @Before
@@ -39,8 +39,6 @@ public class BadlyFormedClassesTest {
         public void someTest() {
         }
     }
-
-    ;
 
     public static class NoTests {
         // class without tests
@@ -54,7 +52,7 @@ public class BadlyFormedClassesTest {
 
     @Test
     public void noRunnableMethods() {
-        assertEquals("No runnable methods", exceptionMessageFrom(NoTests.class));
+        assertThat(exceptionMessageFrom(NoTests.class), containsString("No runnable methods"));
     }
 
     @Test

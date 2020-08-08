@@ -2,6 +2,7 @@ package org.junit;
 
 import org.hamcrest.Matcher;
 import org.hamcrest.MatcherAssert;
+import org.junit.function.ThrowingRunnable;
 import org.junit.internal.ArrayComparisonFailure;
 import org.junit.internal.ExactComparisonCriteria;
 import org.junit.internal.InexactComparisonCriteria;
@@ -841,7 +842,7 @@ public class Assert {
         }
         String expectedString = String.valueOf(expected);
         String actualString = String.valueOf(actual);
-        if (expectedString.equals(actualString)) {
+        if (equalsRegardingNull(expectedString, actualString)) {
             return formatted + "expected: "
                     + formatClassAndValue(expected, expectedString)
                     + " but was: " + formatClassAndValue(actual, actualString);
@@ -849,6 +850,11 @@ public class Assert {
             return formatted + "expected:<" + expectedString + "> but was:<"
                     + actualString + ">";
         }
+    }
+
+    private static String formatClass(Class<?> value) {
+        String className = value.getCanonicalName();
+        return className == null ? value.getName() : className;
     }
 
     private static String formatClassAndValue(Object value, String valueString) {
@@ -917,8 +923,7 @@ public class Assert {
      * @param matcher an expression, built of {@link Matcher}s, specifying allowed
      * values
      * @see org.hamcrest.CoreMatchers
-     * @see org.hamcrest.MatcherAssert
-     * @deprecated use {@code org.hamcrest.junit.MatcherAssert.assertThat()}
+     * @deprecated use {@code org.hamcrest.MatcherAssert.assertThat()}
      */
     @Deprecated
     public static <T> void assertThat(T actual, Matcher<? super T> matcher) {
@@ -951,39 +956,12 @@ public class Assert {
      * @param matcher an expression, built of {@link Matcher}s, specifying allowed
      * values
      * @see org.hamcrest.CoreMatchers
-     * @see org.hamcrest.MatcherAssert
-     * @deprecated use {@code org.hamcrest.junit.MatcherAssert.assertThat()}
+     * @deprecated use {@code org.hamcrest.MatcherAssert.assertThat()}
      */
     @Deprecated
     public static <T> void assertThat(String reason, T actual,
             Matcher<? super T> matcher) {
         MatcherAssert.assertThat(reason, actual, matcher);
-    }
-
-    /**
-     * This interface facilitates the use of expectThrows from Java 8. It allows method references
-     * to void methods (that declare checked exceptions) to be passed directly into expectThrows
-     * without wrapping. It is not meant to be implemented directly.
-     *
-     * @since 4.13
-     */
-    public interface ThrowingRunnable {
-        void run() throws Throwable;
-    }
-
-    /**
-     * Asserts that {@code runnable} throws an exception of type {@code expectedThrowable} when
-     * executed. If it does not throw an exception, an {@link AssertionError} is thrown. If it
-     * throws the wrong type of exception, an {@code AssertionError} is thrown describing the
-     * mismatch; the exception that was actually thrown can be obtained by calling {@link
-     * AssertionError#getCause}.
-     *
-     * @param expectedThrowable the expected type of the exception
-     * @param runnable       a function that is expected to throw an exception when executed
-     * @since 4.13
-     */
-    public static void assertThrows(Class<? extends Throwable> expectedThrowable, ThrowingRunnable runnable) {
-        expectThrows(expectedThrowable, runnable);
     }
 
     /**
@@ -998,7 +976,27 @@ public class Assert {
      * @return the exception thrown by {@code runnable}
      * @since 4.13
      */
-    public static <T extends Throwable> T expectThrows(Class<T> expectedThrowable, ThrowingRunnable runnable) {
+    public static <T extends Throwable> T assertThrows(Class<T> expectedThrowable,
+            ThrowingRunnable runnable) {
+        return assertThrows(null, expectedThrowable, runnable);
+    }
+
+    /**
+     * Asserts that {@code runnable} throws an exception of type {@code expectedThrowable} when
+     * executed. If it does, the exception object is returned. If it does not throw an exception, an
+     * {@link AssertionError} is thrown. If it throws the wrong type of exception, an {@code
+     * AssertionError} is thrown describing the mismatch; the exception that was actually thrown can
+     * be obtained by calling {@link AssertionError#getCause}.
+     *
+     * @param message the identifying message for the {@link AssertionError} (<code>null</code>
+     * okay)
+     * @param expectedThrowable the expected type of the exception
+     * @param runnable a function that is expected to throw an exception when executed
+     * @return the exception thrown by {@code runnable}
+     * @since 4.13
+     */
+    public static <T extends Throwable> T assertThrows(String message, Class<T> expectedThrowable,
+            ThrowingRunnable runnable) {
         try {
             runnable.run();
         } catch (Throwable actualThrown) {
@@ -1006,8 +1004,17 @@ public class Assert {
                 @SuppressWarnings("unchecked") T retVal = (T) actualThrown;
                 return retVal;
             } else {
-                String mismatchMessage = format("unexpected exception type thrown;",
-                        expectedThrowable.getSimpleName(), actualThrown.getClass().getSimpleName());
+                String expected = formatClass(expectedThrowable);
+                Class<? extends Throwable> actualThrowable = actualThrown.getClass();
+                String actual = formatClass(actualThrowable);
+                if (expected.equals(actual)) {
+                    // There must be multiple class loaders. Add the identity hash code so the message
+                    // doesn't say "expected: java.lang.String<my.package.MyException> ..."
+                    expected += "@" + Integer.toHexString(System.identityHashCode(expectedThrowable));
+                    actual += "@" + Integer.toHexString(System.identityHashCode(actualThrowable));
+                }
+                String mismatchMessage = buildPrefix(message)
+                        + format("unexpected exception type thrown;", expected, actual);
 
                 // The AssertionError(String, Throwable) ctor is only available on JDK7.
                 AssertionError assertionError = new AssertionError(mismatchMessage);
@@ -1015,8 +1022,13 @@ public class Assert {
                 throw assertionError;
             }
         }
-        String message = String.format("expected %s to be thrown, but nothing was thrown",
-                expectedThrowable.getSimpleName());
-        throw new AssertionError(message);
+        String notThrownMessage = buildPrefix(message) + String
+                .format("expected %s to be thrown, but nothing was thrown",
+                        formatClass(expectedThrowable));
+        throw new AssertionError(notThrownMessage);
+    }
+
+    private static String buildPrefix(String message) {
+        return message != null && message.length() != 0 ? message + ": " : "";
     }
 }

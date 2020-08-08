@@ -1,6 +1,6 @@
 package org.junit.tests.experimental.theories.runner;
 
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.experimental.results.PrintableResult.testResult;
 import static org.junit.experimental.results.ResultMatchers.failureCountIs;
 import static org.junit.experimental.results.ResultMatchers.hasFailureContaining;
@@ -159,7 +159,7 @@ public class WithUnresolvedGenericTypeVariablesOnTheoryParms {
     @Test
     public void whereTypeVariablesAbound() {
         PrintableResult result = testResult(TypeVariablesAbound.class);
-        assertThat(result, failureCountIs(7));
+        assertThat(result, failureCountIs(1));
         assertThat(result, hasFailureContaining("unresolved type variable A"));
         assertThat(result, hasFailureContaining("unresolved type variable B"));
         assertThat(result, hasFailureContaining("unresolved type variable C"));

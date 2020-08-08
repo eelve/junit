@@ -2,9 +2,9 @@ package org.junit.tests.experimental;
 
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeNoException;
@@ -77,9 +77,14 @@ public class AssumptionTest {
         assertThat(result.getFailureCount(), is(1));
     }
 
-    @Test(expected = AssumptionViolatedException.class)
+    @Test
     public void assumeThatWorks() {
-        assumeThat(1, is(2));
+        try {
+            assumeThat(1, is(2));
+            fail("should throw AssumptionViolatedException");
+        } catch (AssumptionViolatedException e) {
+            // expected
+        }
     }
 
     @Test
@@ -94,10 +99,25 @@ public class AssumptionTest {
         assertCompletesNormally();
     }
 
-    @Test(expected = AssumptionViolatedException.class)
+    @Test
     public void assumeNotNullThrowsException() {
         Object[] objects = {1, 2, null};
-        assumeNotNull(objects);
+        try {
+            assumeNotNull(objects);
+            fail("should throw AssumptionViolatedException");
+        } catch (AssumptionViolatedException e) {
+            // expected
+        }
+    }
+
+    @Test
+    public void assumeNotNullThrowsExceptionForNullArray() {
+        try {
+            assumeNotNull((Object[]) null);
+            fail("should throw AssumptionViolatedException");
+        } catch (AssumptionViolatedException e) {
+            // expected
+        }
     }
 
     @Test
@@ -133,9 +153,24 @@ public class AssumptionTest {
     private void assertCompletesNormally() {
     }
 
-    @Test(expected = AssumptionViolatedException.class)
+    @Test
     public void assumeTrueWorks() {
-        Assume.assumeTrue(false);
+        try {
+            Assume.assumeTrue(false);
+            fail("should throw AssumptionViolatedException");
+        } catch (AssumptionViolatedException e) {
+            assertEquals("got: <false>, expected: is <true>", e.getMessage());
+        }
+    }
+
+    @Test
+    public void assumeFalseWorks() {
+        try {
+            Assume.assumeFalse(true);
+            fail("should throw AssumptionViolatedException");
+        } catch (AssumptionViolatedException e) {
+            assertEquals("got: <true>, expected: is <false>", e.getMessage());
+        }
     }
 
     public static class HasFailingAssumeInBefore {
@@ -188,9 +223,18 @@ public class AssumptionTest {
         assertThat(testResult(AssumptionFailureInConstructor.class), isSuccessful());
     }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void assumeWithExpectedException() {
-        assumeTrue(false);
+    public static class TestClassWithAssumptionFailure {
+
+        @Test(expected = IllegalArgumentException.class)
+        public void assumeWithExpectedException() {
+            assumeTrue(false);
+        }
+    }
+
+    @Test
+    public void assumeWithExpectedExceptionShouldThrowAssumptionViolatedException() {
+        Result result = JUnitCore.runClasses(TestClassWithAssumptionFailure.class);
+        assertThat(result.getAssumptionFailureCount(), is(1));
     }
 
     final static String message = "Some random message string.";
@@ -245,7 +289,7 @@ public class AssumptionTest {
         final List<Failure> failures =
                 runAndGetAssumptionFailures(HasFailingAssumptionWithMessage.class);
 
-        assertEquals(failures.size(), 1);
+        assertEquals(1, failures.size());
         assertTrue(failures.get(0).getMessage().contains(message));
     }
 
